@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# App data (uploads, dataset versions, settings)
+backend/data/
+
+# Secrets
+.env
+backend/.env
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+*.tsbuildinfo
+
+# Notebook checkpoints
+.ipynb_checkpoints/

@@ -1,0 +1,1 @@
+"""RestaurantIQ backend package."""

@@ -1,0 +1,125 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ---------------------------------------------------------------------------
+   Design tokens (RGB channels). Light is the default; .dark overrides.
+   Every color in the app comes from these roles.
+--------------------------------------------------------------------------- */
+:root {
+  --bg: 245 246 248;            /* #F5F6F8 workspace */
+  --surface: 255 255 255;
+  --surface-2: 249 250 251;
+  --surface-3: 240 242 246;
+  --border: 228 231 236;
+  --border-strong: 206 211 220;
+  --text: 17 24 39;
+  --text-muted: 75 85 99;
+  --text-subtle: 107 114 128;
+  --accent: 255 107 87;         /* #FF6B57 coral */
+  --accent-text: 190 58 40;     /* coral darkened for text on light surfaces (5.3:1) */
+  --accent-soft: 255 238 235;
+  --on-accent: 11 27 58;        /* navy text on coral buttons (6.6:1) */
+  --sidebar: 11 27 58;          /* #0B1B3A */
+  --sidebar-text: 196 207 226;
+  --sidebar-hover: 22 41 80;
+  --success: 21 128 61;   --success-soft: 220 252 231;
+  --warning: 161 98 7;    --warning-soft: 254 243 199;
+  --danger: 185 28 28;    --danger-soft: 254 226 226;
+  --info: 29 78 216;      --info-soft: 219 234 254;
+  --shadow: 15 23 42;
+
+  /* chart roles (validated with the dataviz palette validator) */
+  --chart-1: #2a78d6;
+  --chart-2: #eb6834;
+  --chart-3: #1baf7a;
+  --chart-4: #eda100;
+  --chart-muted: #b8bec9;
+  --chart-tier-1: #86b6ef;
+  --chart-tier-2: #2a78d6;
+  --chart-tier-3: #104281;
+  --chart-grid: #e8eaee;
+  --chart-axis: #6b7280;
+  --chart-surface: #ffffff;
+  color-scheme: light;
+}
+
+.dark {
+  --bg: 12 18 32;               /* deep navy, not black */
+  --surface: 20 28 46;
+  --surface-2: 24 33 53;
+  --surface-3: 32 43 66;
+  --border: 41 53 79;
+  --border-strong: 61 75 105;
+  --text: 229 234 242;
+  --text-muted: 168 179 199;
+  --text-subtle: 135 147 170;
+  --accent: 255 122 102;
+  --accent-text: 255 150 133;
+  --accent-soft: 60 33 38;
+  --on-accent: 11 27 58;
+  --sidebar: 9 16 32;
+  --sidebar-text: 186 198 220;
+  --sidebar-hover: 24 36 62;
+  --success: 74 222 128;  --success-soft: 20 52 38;
+  --warning: 250 204 21;  --warning-soft: 59 48 16;
+  --danger: 248 113 113;  --danger-soft: 66 26 30;
+  --info: 125 170 255;    --info-soft: 25 40 75;
+  --shadow: 0 0 0;
+
+  --chart-1: #3987e5;
+  --chart-2: #d95926;
+  --chart-3: #199e70;
+  --chart-4: #c98500;
+  --chart-muted: #4a566e;
+  --chart-tier-1: #9ec5f4;
+  --chart-tier-2: #3987e5;
+  --chart-tier-3: #1c5cab;
+  --chart-grid: #26324a;
+  --chart-axis: #98a3b8;
+  --chart-surface: #141c2e;
+  color-scheme: dark;
+}
+
+@layer base {
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    @apply bg-bg text-ink font-sans antialiased;
+    font-feature-settings: "cv11", "ss01";
+  }
+  ::selection { background: rgb(var(--accent) / 0.25); }
+  :focus-visible { outline: 2px solid rgb(var(--accent)); outline-offset: 2px; border-radius: 6px; }
+  .theme-transition, .theme-transition * {
+    transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important; animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important; scroll-behavior: auto !important;
+  }
+}
+
+@layer components {
+  .card { @apply bg-surface border border-line rounded-xl shadow-card; }
+  .btn { @apply inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition
+                disabled:opacity-50 disabled:cursor-not-allowed select-none whitespace-nowrap; }
+  .btn-primary { @apply btn bg-accent text-on-accent hover:brightness-95 active:brightness-90 font-semibold; }
+  .btn-secondary { @apply btn bg-surface text-ink border border-line hover:bg-surface-3 active:bg-surface-3; }
+  .btn-ghost { @apply btn text-muted hover:bg-surface-3 hover:text-ink; }
+  .btn-sm { @apply px-2.5 py-1.5 text-xs; }
+  .input { @apply w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink placeholder:text-subtle
+                  focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent transition disabled:opacity-60; }
+  .label { @apply block text-xs font-medium text-muted mb-1; }
+  .chip { @apply inline-flex items-center gap-1 rounded-full border border-line bg-surface-2 px-2.5 py-0.5 text-xs text-muted; }
+  .table-base { @apply w-full text-sm border-collapse; }
+  .table-base th { @apply text-left text-xs font-semibold text-muted uppercase tracking-wide px-3 py-2 border-b border-line bg-surface-2 whitespace-nowrap; }
+  .table-base td { @apply px-3 py-2 border-b border-line align-top; }
+  .table-base tbody tr { @apply transition-colors hover:bg-surface-2; }
+  .num { @apply text-right tabular-nums whitespace-nowrap; }
+  .code { @apply font-mono text-xs leading-relaxed bg-surface-3 text-ink rounded-lg p-3 overflow-auto whitespace-pre; }
+}
+
+/* Recharts: theme the tooltip wrapper outline */
+.recharts-wrapper:focus, .recharts-surface:focus { outline: none; }
