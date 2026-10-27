@@ -12,6 +12,7 @@ import { Donut, HBarChart, ScatterPlot, VBarChart, useChartColors } from "../com
 import { Assumptions, Card, EmptyState, ErrorState, NoDataset, Note, PageHeader, SampleBadge, SectionTitle, Skeleton, Unavailable } from "../components/ui";
 import type { Filters } from "../lib/filters";
 import type { ReactNode } from "react";
+import { Link } from "react-router-dom";
 
 export function ContextLine({ ctx }: { ctx: DashboardData["context"] }) {
   return (
@@ -43,6 +44,22 @@ function ChartCard({ id, result, title, subtitle, datasetId, filters, children, 
   );
 }
 
+/** Explains N/A values caused by unmapped columns (not by filters), with the fix. */
+function MissingFieldsNotice({ data }: { data: DashboardData }) {
+  const missing = data.kpis.filter((k) => !k.available && k.reason?.startsWith("Not available for this dataset"));
+  if (!missing.length) return null;
+  const needs = Array.from(new Set(missing.map((k) => k.reason!.replace(/^Not available for this dataset: requires /, "").replace(/\.$/, ""))));
+  return (
+    <div className="mb-4">
+      <Note tone="warning">
+        <span className="font-semibold">{missing.map((k) => k.label).join(", ")} show N/A</span> because this dataset version has no {needs.join(" or ")} mapped.
+        Filters do not cause this. If your file has such a column (for example "votes" or "num of ratings"), open{" "}
+        <Link to="/data" className="font-semibold text-accent-ink underline">Data → Re-map columns</Link> to import a corrected version.
+      </Note>
+    </div>
+  );
+}
+
 export default function Dashboard() {
   const active = useActiveDataset();
   const { filters, reset } = useFilters();
@@ -70,6 +87,7 @@ export default function Dashboard() {
       <FilterBar datasetId={ds} />
       {q.isError && <ErrorState error={q.error} onRetry={() => q.refetch()} />}
       {d && <ContextLine ctx={d.context} />}
+      {d && <MissingFieldsNotice data={d} />}
       {noRows && (
         <div className="card mb-6"><EmptyState title="No restaurants match these filters" message="Remove a filter or reset all filters to see results."
                                                action={<button className="btn-secondary" onClick={reset}>Reset filters</button>} /></div>

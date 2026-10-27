@@ -44,6 +44,8 @@ a Bayesian weighted rating (C = 3.95, m = 33 votes), listing share and location 
 effect sizes, and an exploratory Opportunity Score with a sensitivity check. Every metric is computed in pandas and
 cross-checked against DuckDB SQL; an independent notebook re-implements the cleaning and KPIs (19/19 checks PASS).
 
+Each import is stored in MongoDB as an immutable, numbered version: one document per cleaned listing (with its quality flags and its cuisines as an array), plus the cleaning log and column-quality report, all private to the account that imported it. The raw file stays byte-identical on disk with a SHA-256 checksum, so any number in this case study can be traced back to the exact source file and cleaning run.
+
 ## Five key insights (computed) and recommended actions
 
 1. **North Indian dominates listings.** 146 of 774 restaurants (18.9%) list North Indian; Chinese follows with 136.

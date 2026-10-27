@@ -1,12 +1,16 @@
 import { lazy, Suspense } from "react";
 import { Route, Routes } from "react-router-dom";
 import { Layout } from "./components/Layout";
+import { ProtectedRoute } from "./components/ProtectedRoute";
 import { Spinner } from "./components/ui";
+import { AuthProvider } from "./hooks/useAuth";
 import { useActiveDataset } from "./hooks/useDataset";
 import { FilterProvider } from "./hooks/useFilters";
 import Dashboard from "./pages/Dashboard";
 import DataPage from "./pages/Data";
+import Login from "./pages/Login";
 import NotFound from "./pages/NotFound";
+import Signup from "./pages/Signup";
 
 // Heavier pages are code-split so the first load stays fast.
 const Explorer = lazy(() => import("./pages/Explorer"));
@@ -18,7 +22,8 @@ const Reports = lazy(() => import("./pages/Reports"));
 const Methodology = lazy(() => import("./pages/Methodology"));
 const SettingsPage = lazy(() => import("./pages/Settings"));
 
-export default function App() {
+/** The signed-in application: only rendered after the session check succeeds. */
+function ProtectedApp() {
   const active = useActiveDataset();
   return (
     <FilterProvider datasetId={active.data?.dataset_id}>
@@ -40,5 +45,17 @@ export default function App() {
         </Suspense>
       </Layout>
     </FilterProvider>
+  );
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route path="/signup" element={<Signup />} />
+        <Route path="/*" element={<ProtectedRoute><ProtectedApp /></ProtectedRoute>} />
+      </Routes>
+    </AuthProvider>
   );
 }

@@ -34,7 +34,8 @@ def _upload(client, name, content, mime="text/csv"):
 
 
 def test_health(client):
-    assert client.get("/api/health").json() == {"status": "ok"}
+    body = client.get("/api/health").json()
+    assert body["status"] == "ok" and body["database"]["connected"] is True
 
 
 def test_no_dataset_gives_friendly_error(client):
@@ -133,11 +134,19 @@ def test_upload_processing_error_is_friendly(client, monkeypatch):
 
 
 def test_non_restaurant_mapping_rejected(client):
-    df = pd.DataFrame({"employee": ["a", "b"], "salary": ["1", "2"]})
+    df = pd.DataFrame({"employee": ["a", "b"], "department": ["x", "y"], "salary": ["1", "2"]})
     up = _upload(client, "hr.csv", _csv_bytes(df)).json()
     r = client.post(f"/api/uploads/{up['upload_id']}/import",
                     json={"mapping": [{"source_column": "employee", "canonical_field": "restaurant_name"}]})
     assert r.status_code == 422 and "does not look like restaurant data" in r.json()["error"]
+
+
+def test_summary_table_rejected_with_specific_message(client):
+    df = pd.DataFrame({"cuisine": ["Chinese", "Indian"], "listings": [578, 428]})
+    up = _upload(client, "query.csv", _csv_bytes(df)).json()
+    r = client.post(f"/api/uploads/{up['upload_id']}/import",
+                    json={"mapping": [{"source_column": "cuisine", "canonical_field": "cuisines"}]})
+    assert r.status_code == 422 and "summary table" in r.json()["error"]
 
 
 def test_csv_larger_than_former_50mb_limit_is_accepted(client, tmp_path):
@@ -159,10 +168,16 @@ def test_csv_larger_than_former_50mb_limit_is_accepted(client, tmp_path):
                {"source_column": "address", "canonical_field": "address"},
                {"source_column": "rate", "canonical_field": "rating"},
                {"source_column": "votes", "canonical_field": "review_count"}]
-    imp = client.post(f"/api/uploads/{r.json()['upload_id']}/import", json={"mapping": mapping, "rating_scale_max": 5})
-    assert imp.status_code == 200
-    rec = imp.json()["active"]["reconciliation"]
-    assert rec["raw_rows"] == n and rec["rows_used_in_analysis"] == n and rec["balanced"]
+    try:
+        imp = client.post(f"/api/uploads/{r.json()['upload_id']}/import", json={"mapping": mapping, "rating_scale_max": 5})
+        assert imp.status_code == 200
+        rec = imp.json()["active"]["reconciliation"]
+        assert rec["raw_rows"] == n and rec["rows_used_in_analysis"] == n and rec["balanced"]
+    finally:
+        # ~110 MB of generated files (CSV + stored copy + cleaned data): free the disk right away
+        import shutil
+        path.unlink(missing_ok=True)
+        shutil.rmtree(tmp_path / "data", ignore_errors=True)
 
 
 def test_no_50mb_limit_anywhere_in_source():
@@ -250,3 +265,9 @@ def test_market_endpoint(client):
 def test_validation_errors_are_friendly(client):
     r = client.get("/api/dashboard", params={"rating_min": 9})
     assert r.status_code == 422 and r.json()["error"].startswith("Invalid request")
+
+
+def test_root_points_to_app_and_docs(client):
+    r = client.get("/")
+    assert r.status_code == 200 and r.json()["app"] == "http://localhost:5173" and r.json()["api_docs"] == "/docs"
+    assert client.get("/favicon.ico").status_code == 204

@@ -44,7 +44,7 @@ export function SectionTitle({ children, hint }: { children: ReactNode; hint?: R
 
 export function SampleBadge() {
   return (
-    <span className="inline-flex items-center gap-1 rounded-full bg-warning-soft px-2 py-0.5 text-2xs font-semibold text-warning">
+    <span className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-warning-soft px-2 py-0.5 text-2xs font-semibold text-warning">
       <Info className="h-3 w-3" aria-hidden /> Sample data — illustrative only
     </span>
   );
@@ -229,7 +229,11 @@ export function MultiSelect({ label, options, value, onChange, disabled }: {
     document.addEventListener("keydown", onKey);
     return () => { document.removeEventListener("mousedown", onDoc); document.removeEventListener("keydown", onKey); };
   }, [open]);
-  const shown = options.filter((o) => o.value.toLowerCase().includes(q.toLowerCase())).slice(0, 200);
+  const SHOW_MAX = 500;
+  const matching = options.filter((o) => o.value.toLowerCase().includes(q.toLowerCase()));
+  const shown = matching.slice(0, SHOW_MAX);
+  const allMatchingSelected = matching.length > 0 && matching.every((o) => value.includes(o.value));
+  const selectMatching = () => onChange(Array.from(new Set([...value, ...matching.map((o) => o.value)])));
   const toggle = (v: string) => onChange(value.includes(v) ? value.filter((x) => x !== v) : [...value, v]);
   return (
     <div className="relative" ref={ref}>
@@ -245,6 +249,12 @@ export function MultiSelect({ label, options, value, onChange, disabled }: {
       {open && (
         <div id={id} className="card absolute left-0 z-30 mt-1 w-72 max-w-[85vw] p-2 shadow-pop">
           <input className="input mb-2" placeholder={`Search ${label.toLowerCase()}`} value={q} onChange={(e) => setQ(e.target.value)} autoFocus aria-label={`Search ${label}`} />
+          <div className="mb-1 flex items-center justify-between gap-2 px-1 text-xs">
+            <button type="button" className="font-medium text-accent-ink hover:underline disabled:opacity-50" onClick={selectMatching} disabled={allMatchingSelected}>
+              {q ? `Select ${matching.length} matching` : `Select all (${options.length})`}
+            </button>
+            {value.length > 0 && <button type="button" className="text-muted hover:text-ink" onClick={() => onChange([])}>Clear</button>}
+          </div>
           <ul role="listbox" aria-multiselectable="true" aria-label={label} className="max-h-64 overflow-y-auto">
             {shown.map((o) => {
               const selected = value.includes(o.value);
@@ -263,7 +273,7 @@ export function MultiSelect({ label, options, value, onChange, disabled }: {
             })}
             {!shown.length && <li className="px-2 py-3 text-sm text-subtle">No matches</li>}
           </ul>
-          {value.length > 0 && <button className="btn-ghost btn-sm mt-1 w-full" onClick={() => onChange([])}>Clear {label.toLowerCase()}</button>}
+          {matching.length > SHOW_MAX && <p className="px-2 pt-1 text-xs text-subtle">Showing {SHOW_MAX} of {matching.length.toLocaleString()}; type to narrow the list.</p>}
         </div>
       )}
     </div>

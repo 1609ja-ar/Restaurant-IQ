@@ -318,6 +318,10 @@ def profile_file(path: Path, filename: str) -> dict:
     mapping = suggest_mapping(columns_out, sample)
     rating_col = next((m["source_column"] for m in mapping if m["suggested_field"] == "rating"), None)
     scale = infer_rating_scale(sample[rating_col]) if rating_col else None
+    stated = header_rating_scale(rating_col) if rating_col else None
+    if stated:
+        scale = {"max": stated, "min": 0.0, "source": f"the header '{rating_col}' states the scale (out of {stated:g})",
+                 "confident": True}
     cost_col = next((m["source_column"] for m in mapping if m["suggested_field"] == "cost"), None)
     recognised = {m["suggested_field"] for m in mapping if m["suggested_field"]}
     if len(recognised & RESTAURANT_SIGNAL_FIELDS) < 2:
@@ -394,11 +398,43 @@ def _value_check(field_name: str, values: pd.Series) -> tuple[bool, str]:
     return True, ""
 
 
+COUNT_TOKENS = {"num", "number", "no", "nb", "count", "counts", "total", "qty", "n"}
+ENGAGEMENT_TOKENS = {"rating", "ratings", "review", "reviews", "vote", "votes", "rater", "raters"}
+
+
+def is_count_header(norm: str) -> bool:
+    """'num of ratings', 'number_of_reviews', 'rating count', 'total votes' describe HOW MANY ratings,
+    not the rating itself, so they must map to review_count, never to rating."""
+    tokens = set(norm.split("_"))
+    return bool(tokens & COUNT_TOKENS) and bool(tokens & ENGAGEMENT_TOKENS)
+
+
+def is_index_column(col: str, values: pd.Series) -> bool:
+    """A row index written by pandas/Excel ('Unnamed: 0', 'index', blank header) holding 0..n-1 or 1..n."""
+    norm = normalize_header(col)
+    if not (norm.startswith("unnamed") or norm in {"index", "column_1", "id_", ""}):
+        return False
+    num = _to_number(values.dropna()).dropna()
+    if num.empty or not (num % 1 == 0).all():
+        return False
+    diffs = num.diff().dropna()
+    return bool(len(diffs) == 0 or (diffs == 1).all())
+
+
 def suggest_mapping(columns: list[str], sample: pd.DataFrame) -> list[dict]:
     candidates = []  # (score, column, field, reason)
+    index_cols = {c for c in columns if is_index_column(c, sample[c])}
     for col in columns:
+        if col in index_cols:
+            continue
         norm = normalize_header(col)
         tokens = set(norm.split("_"))
+        if is_count_header(norm):
+            ok, why = _value_check("review_count", sample[col])
+            if ok:
+                candidates.append((0.93, col, "review_count",
+                                   f"header '{col}' describes a count of ratings/reviews; {why}"))
+            continue  # never suggest a count column as the rating itself
         for fname, spec in CANONICAL_FIELDS.items():
             best = None
             for idx, syn in enumerate(spec["synonyms"]):
@@ -438,10 +474,21 @@ def suggest_mapping(columns: list[str], sample: pd.DataFrame) -> list[dict]:
             out.append({"source_column": col, "suggested_field": fname,
                         "confidence": "high" if score >= 0.9 else "medium",
                         "score": round(score, 3), "reason": reason})
+        elif col in index_cols:
+            out.append({"source_column": col, "suggested_field": None, "confidence": None, "score": 0,
+                        "reason": "Looks like a row index exported by pandas/Excel (0, 1, 2, ...). It is kept as an "
+                                  "extra column and can be ignored."})
         else:
             out.append({"source_column": col, "suggested_field": None, "confidence": None, "score": 0,
                         "reason": "No confident match; the column will be preserved as an extra field."})
     return out
+
+
+def header_rating_scale(col: str) -> float | None:
+    """Scale stated in the header itself: 'rate (out of 5)', 'rating/10', 'score_100'."""
+    m = re.search(r"(?:out\s*of|/)\s*(\d+(?:\.\d+)?)", str(col), flags=re.I) or \
+        re.search(r"(?:^|_)(5|10|100)$", normalize_header(col))
+    return float(m.group(1)) if m else None
 
 
 def infer_rating_scale(values: pd.Series) -> dict:

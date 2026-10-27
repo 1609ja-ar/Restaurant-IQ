@@ -63,3 +63,13 @@ body limit. Uploads stream to disk in 1 MB blocks, CSVs are read in 100k-row chu
 rejected with the exact line number, never truncated. A regression test uploads a ~55 MB, 60,000-row CSV and
 asserts that all rows are imported. The README documents the real limits that remain: RAM, disk, processing time,
 XLSX memory use and any reverse-proxy body limit.
+
+**11. Why MongoDB, and how is the data modelled?**
+Setup was the weak point before: a SQL server needed an admin password, an app user and grants before anyone
+could sign in. With MongoDB the backend only needs a connection string and creates its own collections and
+indexes on startup. The model follows how the data is read: one document per cleaned listing, with cuisines and
+restaurant types as arrays (multikey indexes replace two bridge tables), versions in `datasets` with a unique
+version number, and accounts in `users` with a unique email index, so a duplicate sign-up is rejected by the
+database itself. A standalone MongoDB has no multi-document transactions, so an import writes the rows first and
+the version document last: a version is either complete or invisible. The analytics stay in pandas on the
+loaded version; a test imports the same file into MongoDB and into the file store and requires identical KPIs.

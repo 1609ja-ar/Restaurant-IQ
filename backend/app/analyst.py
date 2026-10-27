@@ -1,23 +1,22 @@
 """AI Analyst: question -> intent -> deterministic pandas analysis -> JSON -> explanation.
 
-The numbers always come from the registered calculation functions. An LLM (Claude) is
-used only to *explain* that JSON, and only when ANTHROPIC_API_KEY is configured.
+The numbers always come from the registered calculation functions. A language model (Groq by
+default, see services/llm_client.py) is used only to *explain* that JSON, and only when its API key is set.
 Without a key the app runs in clearly labeled Demo Mode with templated explanations.
 """
 from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 
 from . import calculations as calc
 from . import stats
 from .kpis import Context, Filters, apply_filters
+from .services import llm_client
 
 log = logging.getLogger("restaurantiq.analyst")
 
-DEFAULT_MODEL = "claude-opus-5-5"
 
 SUGGESTED = [
     {"id": "cuisine_gaps", "question": "Which cuisines have above-average weighted ratings with below-average listing counts?"},
@@ -310,7 +309,8 @@ def ask(ctx: Context, question: str, location: str | None = None, intent_hint: s
 # Optional LLM explanation (only the computed JSON is sent)
 # ---------------------------------------------------------------------------
 def mode() -> str:
-    return "llm" if os.environ.get("ANTHROPIC_API_KEY") else "demo"
+    """'llm' when the selected provider's API key is configured, otherwise labeled Demo Mode."""
+    return "llm" if llm_client.is_configured() else "demo"
 
 
 SYSTEM_PROMPT = (
@@ -323,37 +323,15 @@ SYSTEM_PROMPT = (
 
 
 def explain(question: str, result: dict) -> tuple[str | None, str, str | None]:
-    """Returns (explanation, mode, ai_error). Demo Mode returns (None, 'demo', None)."""
+    """Returns (explanation, mode, ai_error). Demo Mode returns (None, 'demo', None).
+    Only the computed JSON result is sent to the language model, never the dataset itself."""
     if mode() != "llm" or not result.get("can_answer"):
         return None, mode(), None
     payload = {k: result.get(k) for k in ("title", "data", "answer", "caveats", "entities", "is_demo_data")}
+    prompt = f"Question: {question}\n\nComputed result (JSON):\n{json.dumps(payload, default=str)}"
     try:
-        import anthropic
-    except ImportError:
-        return None, "demo", "The anthropic package is not installed, so the AI explanation is unavailable."
-    try:
-        client = anthropic.Anthropic(timeout=60.0, max_retries=1)
-        response = client.beta.messages.create(
-            model=os.environ.get("RIQ_LLM_MODEL", DEFAULT_MODEL),
-            max_tokens=4000,
-            betas=["server-side-fallback-2026-07-01"],
-            fallbacks="default",
-            output_config={"effort": "low"},
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": f"Question: {question}\n\nComputed result (JSON):\n"
-                                                  f"{json.dumps(payload, default=str)}"}],
-        )
-        if response.stop_reason == "refusal":
-            return None, "llm", "The AI service declined to explain this result; the computed answer is shown instead."
-        text = "".join(b.text for b in response.content if b.type == "text").strip()
-        return (text or None), "llm", None if text else "The AI service returned an empty explanation."
-    except anthropic.AuthenticationError:
-        log.warning("Anthropic authentication failed")
-        return None, "llm", "The AI service rejected the configured API key. Check ANTHROPIC_API_KEY in backend/.env."
-    except anthropic.RateLimitError:
-        return None, "llm", "The AI service is rate-limited right now. The computed answer is shown; try again shortly."
-    except anthropic.APIConnectionError:
-        return None, "llm", "The AI service could not be reached. The computed answer is shown instead."
-    except anthropic.APIStatusError as exc:
-        log.warning("Anthropic API error %s", exc.status_code)
-        return None, "llm", f"The AI service returned an error ({exc.status_code}). The computed answer is shown instead."
+        return llm_client.ask_llm(prompt, system=SYSTEM_PROMPT), "llm", None
+    except llm_client.LLMRefused:
+        return None, "llm", "The AI service declined to explain this result; the computed answer is shown instead."
+    except llm_client.LLMError as exc:
+        return None, "llm", f"{exc} The computed answer is shown instead."

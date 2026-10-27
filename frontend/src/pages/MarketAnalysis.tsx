@@ -298,7 +298,7 @@ function Opportunity({ d, weights, setWeights, calc }: { d: MarketData | undefin
     </div>
   );
   return (
-    <Card title={<span className="flex items-center gap-2">Opportunity Score <Tag kind="Exploratory" /></span>}
+    <Card title={<span className="flex flex-wrap items-center gap-2">Opportunity Score <Tag kind="Exploratory" /></span>}
           subtitle="Exploratory indicator, not a prediction of success. Scores cuisine × location pairs from rating quality, engagement and low saturation."
           actions={calc}>
       <div className="grid gap-6 lg:grid-cols-[18rem_1fr]">

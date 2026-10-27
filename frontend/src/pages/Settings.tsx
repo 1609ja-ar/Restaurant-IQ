@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Monitor, Moon, Sun } from "lucide-react";
-import { api } from "../lib/api";
+import { api, ApiError } from "../lib/api";
+import { useAuth } from "../hooks/useAuth";
+import { passwordProblem, PasswordField } from "../components/AuthLayout";
 import { useSettings } from "../hooks/useDataset";
 import { useTheme } from "../hooks/useTheme";
 import { useToast } from "../hooks/useToast";
@@ -74,6 +76,62 @@ export default function SettingsPage() {
           )}
         </Card>
       </div>
+      <div className="mt-4 max-w-xl"><AccountCard /></div>
     </>
+  );
+}
+
+
+/** Account details and password change. Changing the password signs out every other session. */
+function AccountCard() {
+  const { user } = useAuth();
+  const toast = useToast();
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [errors, setErrors] = useState<{ current?: string; next?: string; confirm?: string }>({});
+  const change = useMutation({
+    mutationFn: () => api("/auth/change-password", { method: "POST", body: { current_password: current, new_password: next } }),
+    onSuccess: () => {
+      setCurrent(""); setNext(""); setConfirm("");
+      toast("success", "Password changed", "Other devices have been signed out.");
+    },
+    onError: (e) => {
+      const msg = e instanceof ApiError ? e.message : "Could not change the password.";
+      if (e instanceof ApiError && e.status === 400) setErrors({ current: msg });
+      else toast("error", "Password not changed", msg);
+    },
+  });
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (change.isPending) return;
+    const errs: typeof errors = {};
+    if (!current) errs.current = "Enter your current password.";
+    const pw = passwordProblem(next);
+    if (pw) errs.next = pw;
+    if (confirm !== next) errs.confirm = "The passwords do not match.";
+    setErrors(errs);
+    if (!Object.keys(errs).length) change.mutate();
+  };
+  if (!user) return null;
+  return (
+    <Card title="Account" subtitle={`Signed in as ${user.name} (${user.email})${user.is_demo ? " - demo account" : ""}`}>
+      <form onSubmit={submit} noValidate>
+        <p className="mb-3 text-sm font-medium text-ink">Change password</p>
+        <PasswordField label="Current password" autoComplete="current-password" value={current}
+                       onChange={(e) => { setCurrent(e.target.value); setErrors((x) => ({ ...x, current: undefined })); }}
+                       error={errors.current} disabled={change.isPending} />
+        <PasswordField label="New password" autoComplete="new-password" value={next}
+                       hint="At least 8 characters, with at least one letter and one number."
+                       onChange={(e) => { setNext(e.target.value); setErrors((x) => ({ ...x, next: undefined })); }}
+                       error={errors.next} disabled={change.isPending} />
+        <PasswordField label="Confirm new password" autoComplete="new-password" value={confirm}
+                       onChange={(e) => { setConfirm(e.target.value); setErrors((x) => ({ ...x, confirm: undefined })); }}
+                       error={errors.confirm} disabled={change.isPending} />
+        <button type="submit" className="btn-primary" disabled={change.isPending}>
+          {change.isPending && <Loader2 className="h-4 w-4 animate-spin" aria-hidden />} Change password
+        </button>
+      </form>
+    </Card>
   );
 }

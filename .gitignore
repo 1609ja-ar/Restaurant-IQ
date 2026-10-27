@@ -18,3 +18,8 @@ frontend/dist/
 
 # Notebook checkpoints
 .ipynb_checkpoints/
+
+# Local MongoDB install and data (large binaries)
+notebooks/bin/
+notebooks/data/
+notebooks/log/

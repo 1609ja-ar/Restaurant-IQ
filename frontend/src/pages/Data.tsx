@@ -8,7 +8,7 @@ import { useActiveDataset, useLoadDemo, useSetActive, useVersions } from "../hoo
 import { useToast } from "../hooks/useToast";
 import { fmtBytes, fmtDate, fmtInt, fmtPct } from "../lib/format";
 import type { Capabilities, DatasetDetail, MappingSuggestion, QualityRow, Reconciliation, UploadResponse, ValidateResponse, LogEntry } from "../lib/types";
-import { Assumptions, Card, ErrorState, Note, PageHeader, SampleBadge, SectionTitle, Skeleton, Spinner } from "../components/ui";
+import { Assumptions, Card, ErrorState, Note, PageHeader, SectionTitle, Skeleton, Spinner } from "../components/ui";
 
 const ACCEPTED = [".csv", ".xlsx"];
 
@@ -18,7 +18,7 @@ type UploadState =
   | { phase: "idle" }
   | { phase: "uploading"; file: File; progress: number }
   | { phase: "processing"; file: File }
-  | { phase: "ready"; file: File; data: UploadResponse }
+  | { phase: "ready"; file?: File; data: UploadResponse }
   | { phase: "error"; file?: File; message: string };
 
 export default function DataPage() {
@@ -47,7 +47,7 @@ export default function DataPage() {
       {upload.phase === "ready" && <ImportWizard key={upload.data.upload_id} data={upload.data} onDone={() => setUpload({ phase: "idle" })} />}
 
       <SectionTitle>Dataset versions</SectionTitle>
-      <VersionsPanel />
+      <VersionsPanel onRemap={(data) => { setUpload({ phase: "ready", data }); window.scrollTo({ top: 0, behavior: "smooth" }); }} />
 
       {active.data && <ActiveDatasetReport datasetId={active.data.dataset_id} />}
       {active.isLoading && <Skeleton className="h-64" />}
@@ -164,10 +164,11 @@ function ImportWizard({ data, onDone }: { data: UploadResponse; onDone: () => vo
   const fields = useQuery({ queryKey: ["canonical-fields"], queryFn: () => api<{ fields: FieldDef[] }>("/schema/fields"), staleTime: Infinity });
   const [mapping, setMapping] = useState<Record<string, string>>(() =>
     Object.fromEntries(p.suggested_mapping.map((m) => [m.source_column, m.suggested_field ?? ""])));
-  const [scale, setScale] = useState<string>(p.rating_scale?.max?.toString() ?? "");
-  const [currency, setCurrency] = useState("");
-  const [priceUnit, setPriceUnit] = useState(p.suggested_price_unit || "unknown");
-  const [name, setName] = useState(data.filename.replace(/\.(csv|xlsx)$/i, ""));
+  const prev = data.previous_settings;
+  const [scale, setScale] = useState<string>(prev?.rating_scale_max?.toString() ?? p.rating_scale?.max?.toString() ?? "");
+  const [currency, setCurrency] = useState(prev?.currency ?? "");
+  const [priceUnit, setPriceUnit] = useState(prev?.price_unit ?? (p.suggested_price_unit || "unknown"));
+  const [name, setName] = useState(prev?.dataset_name ? `${prev.dataset_name} (re-mapped)` : data.filename.replace(/\.(csv|xlsx)$/i, ""));
   const [validated, setValidated] = useState<ValidateResponse | null>(null);
 
   const duplicates = Object.values(mapping).filter((v, i, a) => v && a.indexOf(v) !== i);
@@ -209,6 +210,9 @@ function ImportWizard({ data, onDone }: { data: UploadResponse; onDone: () => vo
           <Stat label="Blank rows" value={fmtInt(p.blank_row_count)} />
           <Stat label="Mapped fields" value={fmtInt(Object.values(mapping).filter(Boolean).length)} />
         </div>
+        {data.remap_of && (
+          <div className="mt-3"><Note>Re-mapping the original file of <b>{data.remap_of}</b>. Previous choices are kept; newly suggested fields are marked. Importing creates a new version and {data.remap_of} stays unchanged.</Note></div>
+        )}
         {p.warnings.length > 0 && <div className="mt-3 space-y-2">{p.warnings.map((w) => <Note key={w} tone="warning">{w}</Note>)}</div>}
       </Card>
 
@@ -321,7 +325,7 @@ export function ReconciliationView({ rec }: { rec: Reconciliation }) {
         {steps.map((s) => (
           <li key={s.label} className={`rounded-lg border p-3 ${s.total ? "border-accent/50 bg-accent-soft" : "border-line bg-surface-2"}`}>
             <p className="text-xs text-muted">{s.label}</p>
-            <p className="text-xl font-semibold tabular-nums text-ink">{s.value < 0 ? `−${fmtInt(-s.value)}` : fmtInt(s.value)}</p>
+            <p className="text-xl font-semibold tabular-nums text-ink">{s.value < 0 ? `−${fmtInt(-s.value)}` : fmtInt(Math.abs(s.value))}</p>
             <p className="mt-1 text-xs leading-snug text-subtle">{s.note}</p>
           </li>
         ))}
@@ -399,10 +403,15 @@ function LogView({ log }: { log: LogEntry[] }) {
   );
 }
 
-function VersionsPanel() {
+function VersionsPanel({ onRemap }: { onRemap: (data: UploadResponse) => void }) {
   const versions = useVersions();
   const setActive = useSetActive();
   const toast = useToast();
+  const remap = useMutation({
+    mutationFn: (datasetId: string) => api<UploadResponse>(`/datasets/${datasetId}/remap`),
+    onSuccess: (d) => { onRemap(d); toast("info", `Re-mapping ${d.remap_of}`, "Review the mapping above. Importing creates a new version; the old one is kept."); },
+    onError: (e) => toast("error", "Could not open the mapping", (e as Error).message),
+  });
   if (versions.isLoading) return <Skeleton className="h-24" />;
   if (versions.isError) return <ErrorState error={versions.error} onRetry={() => versions.refetch()} />;
   const rows = versions.data?.versions ?? [];
@@ -418,11 +427,15 @@ function VersionsPanel() {
               return (
                 <tr key={v.dataset_id}>
                   <td className="font-semibold">{v.dataset_id}</td>
-                  <td>{v.name} {v.is_demo && <span className="ml-1"><SampleBadge /></span>}</td>
+                  <td className="min-w-[10rem]">{v.name}{v.is_demo && <span className="ml-1.5 inline-flex whitespace-nowrap rounded bg-warning-soft px-1.5 text-2xs font-semibold text-warning" title="Sample data — illustrative only">Sample</span>}</td>
                   <td className="text-muted">{v.source_filename ?? "N/A"}</td>
                   <td className="num">{fmtInt(v.rows_used)}</td>
                   <td className="whitespace-nowrap text-muted">{fmtDate(v.created_at)}</td>
-                  <td className="text-right">
+                  <td className="whitespace-nowrap text-right">
+                    {!v.is_demo && (
+                      <button className="btn-ghost btn-sm mr-1" disabled={remap.isPending} onClick={() => remap.mutate(v.dataset_id)}
+                              title="Change the column mapping and import as a new version">Re-map columns</button>
+                    )}
                     {isActive ? <span className="chip border-success/40 bg-success-soft text-success">Active</span> : (
                       <button className="btn-secondary btn-sm" disabled={setActive.isPending}
                               onClick={() => setActive.mutate(v.dataset_id, { onSuccess: () => toast("success", `Switched to ${v.dataset_id}`, "All pages now use this version."),

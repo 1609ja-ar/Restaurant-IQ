@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from app import analyst
+from app.config import reload_settings
 
 
 @pytest.fixture()
@@ -59,7 +60,8 @@ def test_intent_detection(q, intent):
 
 
 def test_all_suggested_questions_answer_in_demo_mode(demo, monkeypatch):
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    reload_settings()
     sugg = demo.get("/api/analyst/suggestions").json()
     assert sugg["mode"] == "demo" and len(sugg["suggestions"]) == 6
     for s in sugg["suggestions"]:
@@ -103,7 +105,9 @@ def test_analyst_unanswerable_when_fields_missing(client):
 
 def test_llm_errors_are_friendly_and_secret_free(demo, monkeypatch):
     import anthropic
+    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-not-real")
+    reload_settings()
 
     def create(**kw):
         raise anthropic.APIConnectionError(request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"))
@@ -119,7 +123,9 @@ def test_llm_errors_are_friendly_and_secret_free(demo, monkeypatch):
 
 def test_llm_explanation_used_when_available(demo, monkeypatch):
     import anthropic
+    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-not-real")
+    reload_settings()
     captured = {}
 
     def create(**kw):
@@ -138,7 +144,9 @@ def test_llm_explanation_used_when_available(demo, monkeypatch):
 
 def test_llm_refusal_falls_back_to_computed_answer(demo, monkeypatch):
     import anthropic
+    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-not-real")
+    reload_settings()
 
     class Fake:
         def __init__(self, *a, **k):

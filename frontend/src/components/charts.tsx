@@ -47,6 +47,22 @@ export function TooltipBox({ title, rows }: { title?: ReactNode; rows: { label: 
 
 const axisTick = (c: ChartColors) => ({ fill: c.axis, fontSize: 11 });
 
+const CATEGORY_AXIS_WIDTH = 132;
+
+/** Single-line category label. Recharts wraps long labels onto several lines, which made
+ *  names like "Bannerghatta Road" collide with the neighbouring bar's label. We truncate to
+ *  the axis width instead and keep the full name in a native tooltip. */
+function CategoryTick({ x, y, payload, color }: { x?: number; y?: number; payload?: { value: unknown }; color: string }) {
+  const full = String(payload?.value ?? "");
+  const maxChars = Math.floor((CATEGORY_AXIS_WIDTH - 12) / 6.4);
+  return (
+    <g transform={`translate(${x ?? 0},${y ?? 0})`}>
+      <title>{full}</title>
+      <text x={-4} y={0} dy={4} textAnchor="end" fill={color} fontSize={11}>{truncate(full, maxChars)}</text>
+    </g>
+  );
+}
+
 function truncate(s: string, n: number) {
   return s.length > n ? `${s.slice(0, n - 1)}…` : s;
 }
@@ -65,7 +81,7 @@ export function HBarChart<T extends Record<string, unknown>>({ data, labelKey, v
         <BarChart data={data} layout="vertical" margin={{ top: 4, right: 40, bottom: 4, left: 4 }} barCategoryGap={4}>
           <CartesianGrid horizontal={false} stroke={c.grid} />
           <XAxis type="number" tick={axisTick(c)} tickFormatter={(v) => fmtCompact(v)} axisLine={false} tickLine={false} />
-          <YAxis type="category" dataKey={labelKey} width={128} tick={axisTick(c)} tickFormatter={(v) => truncate(String(v), 20)}
+          <YAxis type="category" dataKey={labelKey} width={CATEGORY_AXIS_WIDTH} tick={(props) => <CategoryTick {...props} color={c.axis} />}
                  axisLine={{ stroke: c.grid }} tickLine={false} interval={0} />
           <Tooltip cursor={{ fill: c.grid, opacity: 0.5 }}
                    content={({ active, payload }: TooltipProps<number, string>) => {

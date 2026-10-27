@@ -2,6 +2,18 @@
 import type { Filters } from "./filters";
 import { filtersToParams } from "./filters";
 
+/** Session handling: the backend keeps the session in an HttpOnly cookie, so this client never sees a
+ *  token. Any 401 from a protected endpoint means the session is gone; the AuthProvider registers a
+ *  handler that signs the user out and shows the login page. Auth endpoints report their own errors. */
+type UnauthorizedHandler = (message: string) => void;
+let onUnauthorized: UnauthorizedHandler | null = null;
+export function setUnauthorizedHandler(handler: UnauthorizedHandler | null): void {
+  onUnauthorized = handler;
+}
+function notifyUnauthorized(path: string, status: number, message: string): void {
+  if (status === 401 && !path.startsWith("/auth/") && onUnauthorized) onUnauthorized(message);
+}
+
 export class ApiError extends Error {
   status: number;
   constructor(message: string, status: number) {
@@ -42,13 +54,18 @@ export async function api<T>(path: string, opts: { params?: Params; method?: str
   try {
     res = await fetch(`/api${path}${buildQuery(opts.params)}`, {
       method: opts.method ?? "GET",
+      credentials: "include",
       headers: opts.body !== undefined ? { "Content-Type": "application/json" } : undefined,
       body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
     });
   } catch {
     throw new ApiError(BACKEND_DOWN, 0);
   }
-  if (!res.ok) throw await parseError(res);
+  if (!res.ok) {
+    const err = await parseError(res);
+    notifyUnauthorized(path, res.status, err.message);
+    throw err;
+  }
   try {
     return (await res.json()) as T;
   } catch {
@@ -63,13 +80,18 @@ export async function downloadFile(path: string, opts: { params?: Params; method
   try {
     res = await fetch(`/api${path}${buildQuery(opts.params)}`, {
       method: opts.method ?? "GET",
+      credentials: "include",
       headers: opts.body !== undefined ? { "Content-Type": "application/json" } : undefined,
       body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
     });
   } catch {
     throw new ApiError(BACKEND_DOWN, 0);
   }
-  if (!res.ok) throw await parseError(res);
+  if (!res.ok) {
+    const err = await parseError(res);
+    notifyUnauthorized(path, res.status, err.message);
+    throw err;
+  }
   const blob = await res.blob();
   const disposition = res.headers.get("Content-Disposition") ?? "";
   const name = /filename="?([^"]+)"?/.exec(disposition)?.[1] ?? fallbackName;
@@ -94,6 +116,7 @@ export function uploadFile<T>(file: File, onProgress: (fraction: number) => void
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "/api/uploads");
+    xhr.withCredentials = true;
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) onProgress(e.loaded / e.total);
     };
@@ -113,6 +136,7 @@ export function uploadFile<T>(file: File, onProgress: (fraction: number) => void
         ?? (xhr.status === 413
           ? "The upload was rejected by a server or proxy body-size limit (not by RestaurantIQ). Increase that limit or split the file."
           : `Upload failed (${xhr.status || "network error"}). Make sure the backend is running.`);
+      notifyUnauthorized("/uploads", xhr.status, msg);
       reject(new ApiError(msg, xhr.status));
     };
     xhr.onerror = () => reject(new ApiError("The upload was interrupted. Check that the backend is running and try again.", 0));

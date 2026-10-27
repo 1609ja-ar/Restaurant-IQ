@@ -20,7 +20,7 @@ export default function AiAnalyst() {
   const active = useActiveDataset();
   const ds = active.data?.dataset_id;
   const opts = useFilterOptions(ds);
-  const sugg = useQuery({ queryKey: ["analyst-suggestions"], queryFn: () => api<{ suggestions: Suggestion[]; mode: "demo" | "llm" }>("/analyst/suggestions") });
+  const sugg = useQuery({ queryKey: ["analyst-suggestions"], queryFn: () => api<{ suggestions: Suggestion[]; mode: "demo" | "llm"; provider?: string }>("/analyst/suggestions") });
   const [question, setQuestion] = useState("");
   const [location, setLocation] = useState("");
   const [history, setHistory] = useState<AskResult[]>([]);
@@ -39,10 +39,10 @@ export default function AiAnalyst() {
     <>
       <PageHeader title="AI Analyst" description="Ask a business question. The answer is computed by deterministic pandas analysis on the active dataset; a language model may only explain those computed numbers." />
       {mode === "demo" && (
-        <div className="mb-4"><Note tone="warning"><span className="font-semibold">Demo Mode.</span> No ANTHROPIC_API_KEY is configured, so answers are templated summaries of the computed results. No live language model is connected.</Note></div>
+        <div className="mb-4"><Note tone="warning"><span className="font-semibold">Demo Mode.</span> No AI API key is configured (GROQ_API_KEY in backend/.env), so answers are templated summaries of the computed results. No live language model is connected.</Note></div>
       )}
       {mode === "llm" && (
-        <div className="mb-4"><Note><span className="font-semibold">Live explanations enabled.</span> Only the computed JSON result is sent to Claude for a plain-language explanation; numbers always come from the analysis.</Note></div>
+        <div className="mb-4"><Note><span className="font-semibold">Live explanations enabled.</span> Only the computed JSON result is sent to {sugg.data?.provider ?? "the language model"} for a plain-language explanation; numbers always come from the analysis.</Note></div>
       )}
 
       <Card>

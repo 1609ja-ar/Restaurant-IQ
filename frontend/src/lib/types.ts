@@ -105,7 +105,11 @@ export interface UploadProfile {
   warnings: string[];
 }
 
-export interface UploadResponse { upload_id: string; filename: string; size_bytes: number; profile: UploadProfile }
+export interface UploadResponse {
+  upload_id: string; filename: string; size_bytes: number; profile: UploadProfile;
+  remap_of?: string;
+  previous_settings?: { dataset_name: string | null; rating_scale_max: number | null; currency: string | null; price_unit: string | null };
+}
 
 export interface ValidateResponse {
   reconciliation: Reconciliation;

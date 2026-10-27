@@ -106,8 +106,13 @@ export function FilterBar({ datasetId, showSearch = false }: { datasetId: string
 
 function ActiveChips({ filters, update, reset }: { filters: Filters; update: (p: Partial<Filters>) => void; reset: () => void }) {
   const chips: { label: string; clear: () => void }[] = [];
-  const multi = (key: "location" | "cuisine" | "restaurant_type" | "price_tier") =>
-    filters[key].forEach((v) => chips.push({ label: v, clear: () => update({ [key]: filters[key].filter((x) => x !== v) } as Partial<Filters>) }));
+  const LABELS = { location: "Location", cuisine: "Cuisine", restaurant_type: "Type", price_tier: "Price tier" } as const;
+  const multi = (key: "location" | "cuisine" | "restaurant_type" | "price_tier") => {
+    const vals = filters[key];
+    // More than 5 values collapse into one chip so selecting "everything" doesn't flood the bar.
+    if (vals.length > 5) chips.push({ label: `${LABELS[key]}: ${vals.length} selected`, clear: () => update({ [key]: [] } as Partial<Filters>) });
+    else vals.forEach((v) => chips.push({ label: v, clear: () => update({ [key]: vals.filter((x) => x !== v) } as Partial<Filters>) }));
+  };
   multi("location"); multi("cuisine"); multi("restaurant_type"); multi("price_tier");
   if (filters.rating_min !== null || filters.rating_max !== null)
     chips.push({ label: `Rating ${filters.rating_min ?? 0}–${filters.rating_max ?? 5}`, clear: () => update({ rating_min: null, rating_max: null }) });

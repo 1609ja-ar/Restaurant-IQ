@@ -158,10 +158,13 @@ class Filters:
 
     def describe(self) -> list[str]:
         out = []
-        if self.location: out.append("Location: " + ", ".join(self.location))
-        if self.cuisine: out.append("Cuisine: " + ", ".join(self.cuisine))
-        if self.restaurant_type: out.append("Type: " + ", ".join(self.restaurant_type))
-        if self.price_tier: out.append("Price tier: " + ", ".join(self.price_tier))
+        def values(items: list[str]) -> str:
+            # Long selections are summarized so context lines and report headers stay readable.
+            return ", ".join(items) if len(items) <= 4 else f"{len(items)} selected ({', '.join(items[:3])}, ...)"
+        if self.location: out.append("Location: " + values(self.location))
+        if self.cuisine: out.append("Cuisine: " + values(self.cuisine))
+        if self.restaurant_type: out.append("Type: " + values(self.restaurant_type))
+        if self.price_tier: out.append("Price tier: " + values(self.price_tier))
         if self.rating_min is not None or self.rating_max is not None:
             out.append(f"Rating {self.rating_min if self.rating_min is not None else 0:g}-"
                        f"{self.rating_max if self.rating_max is not None else 5:g} (unrated excluded)")

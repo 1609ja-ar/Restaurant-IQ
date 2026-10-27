@@ -135,6 +135,13 @@ def parse_list(value) -> list[str] | None:
     return items or None
 
 
+def _as_nullable_text(col: pd.Series) -> pd.Series:
+    """Object column where every missing value is None (not NaN), so missing is represented
+    the same way in memory, in MongoDB and in exports."""
+    obj = col.astype(object)
+    return obj.where(obj.notna(), None)
+
+
 def normalize_key(value) -> str | None:
     """Normalization used for duplicate detection: case, whitespace and punctuation-insensitive."""
     if value is None or (isinstance(value, float) and np.isnan(value)):
@@ -211,7 +218,7 @@ def clean_dataset(raw: pd.DataFrame, settings: CleanSettings) -> CleanResult:
                         "rows": int(out[dst].notna().sum())})
         elif kind == "rating":
             parsed = col.map(lambda v: parse_rating(v, scale_max))
-            out["rating_raw"] = col.astype(object)
+            out["rating_raw"] = _as_nullable_text(col)
             out["rating_source"] = parsed.map(lambda t: t[0]).astype(float)
             out["is_unrated"] = parsed.map(lambda t: t[1] == "unrated").astype(bool)
             upper = scale_max if scale_max else np.inf
@@ -231,14 +238,14 @@ def clean_dataset(raw: pd.DataFrame, settings: CleanSettings) -> CleanResult:
                         f"(NEW, '-', blank or unparseable) kept but excluded from rating statistics. Scale: {transform}.",
                         "rows": counts["unrated"]})
         elif kind == "count":
-            out["review_count_raw"] = col.astype(object)
+            out["review_count_raw"] = _as_nullable_text(col)
             num = col.map(parse_number).astype(float)
             out["votes_invalid"] = num < 0
             out[dst] = num.where(~out["votes_invalid"])
             counts["votes_invalid"] = int(out["votes_invalid"].sum())
             counts["votes_unparseable"] = int((col.notna() & num.isna()).sum())
         elif kind == "money":
-            out["cost_raw"] = col.astype(object)
+            out["cost_raw"] = _as_nullable_text(col)
             num = col.map(parse_money).astype(float)
             out["cost_invalid"] = num < 0
             out[dst] = num.where(~out["cost_invalid"])
@@ -286,7 +293,7 @@ def clean_dataset(raw: pd.DataFrame, settings: CleanSettings) -> CleanResult:
         if col == "source_row" or col in mapping:
             continue
         name = col if (col not in out.columns and col not in INTERNAL_COLUMNS and col not in CANONICAL_FIELDS) else f"src_{col}"
-        out[name] = df[col].to_numpy()
+        out[name] = _as_nullable_text(df[col]).to_numpy()
         extras.append(name)
 
     # ---- Rule 3: duplicates -------------------------------------------------

@@ -1,9 +1,10 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, NavLink, useLocation } from "react-router-dom";
 import {
-  BarChart3, BookOpen, Bot, Database, FileText, GitCompare, LayoutDashboard, Menu, Moon, Settings, Sun, Table2,
-  Terminal, X, type LucideIcon,
+  BarChart3, BookOpen, Bot, Database, FileText, GitCompare, LayoutDashboard, LogOut, Menu, Moon, Settings, Sun,
+  Table2, Terminal, X, type LucideIcon,
 } from "lucide-react";
+import { useAuth } from "../hooks/useAuth";
 import { useActiveDataset } from "../hooks/useDataset";
 import { useTheme } from "../hooks/useTheme";
 import { SampleBadge } from "./ui";
@@ -76,6 +77,55 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   );
 }
 
+/** Header user menu: who is signed in, Settings and Sign out. */
+function UserMenu() {
+  const { user, logout } = useAuth();
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onDoc); document.removeEventListener("keydown", onKey); };
+  }, [open]);
+  if (!user) return null;
+  const initials = user.name.split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase() || "U";
+  const signOut = async () => {
+    setBusy(true);
+    try { await logout(); } finally { setBusy(false); }
+  };
+  return (
+    <div className="relative" ref={ref}>
+      <button type="button" onClick={() => setOpen((o) => !o)} aria-haspopup="menu" aria-expanded={open}
+              aria-label={`Account menu for ${user.name}`}
+              className="flex items-center gap-2 rounded-lg px-1.5 py-1 text-sm text-ink transition hover:bg-surface-3">
+        <span className="flex h-7 w-7 items-center justify-center rounded-full bg-accent-soft text-xs font-semibold text-accent-ink" aria-hidden>{initials}</span>
+        <span className="hidden max-w-[10rem] truncate font-medium sm:inline">{user.name}</span>
+      </button>
+      {open && (
+        <div role="menu" aria-label="Account" className="card absolute right-0 z-40 mt-1 w-60 p-1 shadow-pop">
+          <div className="border-b border-line px-3 py-2">
+            <p className="truncate text-sm font-semibold text-ink">{user.name}</p>
+            <p className="truncate text-xs text-muted">{user.email}</p>
+            {user.is_demo && <p className="mt-1 text-2xs font-semibold uppercase tracking-wide text-warning">Demo account</p>}
+          </div>
+          <Link role="menuitem" to="/settings" onClick={() => setOpen(false)}
+                className="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-muted hover:bg-surface-3 hover:text-ink">
+            <Settings className="h-4 w-4" aria-hidden /> Settings
+          </Link>
+          <button role="menuitem" type="button" onClick={signOut} disabled={busy}
+                  className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-muted hover:bg-surface-3 hover:text-ink disabled:opacity-50">
+            <LogOut className="h-4 w-4" aria-hidden /> {busy ? "Signing out..." : "Sign out"}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ThemeToggle() {
   const { theme, toggle } = useTheme();
   const next = theme === "dark" ? "light" : "dark";
@@ -135,6 +185,7 @@ export function Layout({ children }: { children: ReactNode }) {
             {ds?.is_demo && <span className="hidden md:inline-flex"><SampleBadge /></span>}
           </div>
           <ThemeToggle />
+          <UserMenu />
         </header>
         <main id="main" className="mx-auto w-full max-w-[1400px] px-4 py-6 sm:px-6 lg:px-8">{children}</main>
       </div>

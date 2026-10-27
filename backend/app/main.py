@@ -13,6 +13,7 @@ import io
 import logging
 import threading
 from collections import OrderedDict
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -22,26 +23,69 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
+from . import auth
 from . import calculations as calc
 from . import ingest, insights, kpis, sql_queries, stats
 from .cleaning import CleanSettings, clean_dataset
 from .demo_data import DEMO_MAPPING, demo_csv_bytes, generate_demo_dataframe
-from .env import load_env
+from .config import get_settings as app_config
 from .kpis import Filters, apply_filters, build_context
 from .schemas import (ActiveDatasetRequest, AskRequest, CompareRequest, ImportSettings, ReportRequest,
                       SettingsUpdate, SqlRequest)
+from .db import DatabaseUnavailable, MongoStore
+from .services import llm_client
+from .services.errors import LLMError
 from .store import NotFound, Store
 
-load_env()
 log = logging.getLogger("restaurantiq")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
-app = FastAPI(title="RestaurantIQ API", version="1.0.0",
-              description="Turn Restaurant Data Into Smarter Business Decisions.")
-app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
-                   allow_methods=["*"], allow_headers=["*"], expose_headers=["Content-Disposition"])
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    """Startup checks: report (never print) the AI key status, connect to the database and create its
+    collections/indexes, check the JWT secret (a startup error in production if missing) and seed the demo
+    account if configured. If MongoDB is unreachable the API still starts and every request that needs the
+    database answers 503 with the reason, which the login page shows."""
+    llm_client.startup_check()
+    if store.backend == "mongodb":
+        try:
+            created = store.ensure_indexes()
+            log.info("MongoDB indexes ready (%s).", f"created: {', '.join(created)}" if created else "all present")
+        except DatabaseUnavailable as exc:
+            log.error("MongoDB is not reachable: %s", exc)
+    db = store.health()
+    if db.get("connected"):
+        log.info("Storage backend: %s ready.", db["backend"])
+    else:
+        log.error("Storage backend %s is not reachable: %s", db["backend"], db.get("error"))
+    try:
+        auth.startup_check()
+    except auth.AuthConfigError as exc:
+        log.error("Authentication is not configured: %s", exc)
+        raise
+    yield
 
-store = Store()
+
+# Every route requires a signed-in user except auth.PUBLIC_PATHS and the API docs.
+app = FastAPI(title="RestaurantIQ API", version="1.0.0", lifespan=lifespan,
+              dependencies=[Depends(auth.require_auth)],
+              description="Turn Restaurant Data Into Smarter Business Decisions.")
+app.add_middleware(CORSMiddleware, allow_origins=list(app_config().cors_origins), allow_credentials=True,
+                   allow_methods=["GET", "POST", "PUT", "DELETE"], allow_headers=["Content-Type", "Authorization"],
+                   expose_headers=["Content-Disposition"])
+app.include_router(auth.router)
+
+
+
+def make_store():
+    """MongoDB is the database of record; RIQ_STORAGE=file keeps everything in local files (tests)."""
+    s = app_config()
+    if s.storage == "file":
+        return Store(s.data_dir)
+    return MongoStore(s.mongo_uri, s.mongo_db, s.data_dir, timeout_ms=s.mongo_timeout_ms)
+
+
+store = make_store()
 _ctx_cache: OrderedDict[tuple, kpis.Context] = OrderedDict()
 _ctx_lock = threading.Lock()
 
@@ -58,6 +102,17 @@ class UserError(Exception):
 @app.exception_handler(UserError)
 async def _user_error(_: Request, exc: UserError):
     return JSONResponse({"error": str(exc)}, status_code=exc.status)
+
+
+@app.exception_handler(DatabaseUnavailable)
+async def _db_unavailable(_: Request, exc: DatabaseUnavailable):
+    log.error("Database unavailable: %s", exc)
+    return JSONResponse({"error": str(exc)}, status_code=503)
+
+
+@app.exception_handler(LLMError)
+async def _llm_error(_: Request, exc: LLMError):
+    return JSONResponse({"error": str(exc)}, status_code=exc.status_code)
 
 
 @app.exception_handler(NotFound)
@@ -97,8 +152,31 @@ async def _unexpected(_: Request, exc: Exception):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+def owned_meta(dataset_id: str) -> dict:
+    """Dataset metadata, only if the signed-in user owns it. Other users' versions look like missing ones."""
+    meta = store.dataset_meta(dataset_id)
+    if meta.get("owner_id") != auth.current_user_id():
+        raise NotFound(f"Dataset version '{dataset_id}' not found.")
+    return meta
+
+
+def resolve_owned(dataset_id: Optional[str]) -> str:
+    ds = dataset_id or store.active_id(auth.current_user_id())
+    if not ds:
+        raise NotFound("No dataset is loaded yet. Load the sample dataset or import a file on the Data page.")
+    owned_meta(ds)
+    return ds
+
+
+def owned_upload(upload_id: str) -> dict:
+    meta = store.upload_meta(upload_id)
+    if meta.get("owner_id") != auth.current_user_id():
+        raise NotFound("Upload not found. It may have expired; please upload the file again.")
+    return meta
+
+
 def get_ctx(dataset_id: Optional[str]) -> kpis.Context:
-    ds = store.resolve(dataset_id)
+    ds = resolve_owned(dataset_id)
     settings = store.settings()
     key = (ds, settings["revision"])
     with _ctx_lock:
@@ -145,9 +223,31 @@ def dataset_summary(meta: dict) -> dict:
 # ---------------------------------------------------------------------------
 # Health
 # ---------------------------------------------------------------------------
+@app.get("/", include_in_schema=False)
+def root():
+    """The backend has no web page of its own; point people to the app and the API docs."""
+    return {"message": "RestaurantIQ backend is running. Open the app at http://localhost:5173 "
+                       "(start it with `npm run dev` in the frontend folder).",
+            "app": "http://localhost:5173", "api_docs": "/docs", "health": "/api/health", "ai_check": "/api/test-llm"}
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    return Response(status_code=204)
+
+
 @app.get("/api/health")
 def health():
-    return {"status": "ok"}
+    """'status' reports the API process; 'database' reports the storage backend separately."""
+    return {"status": "ok", "database": store.health()}
+
+
+@app.get("/api/test-llm")
+@app.get("/api/test-claude")  # older name, kept so existing links keep working
+def test_llm():
+    """Verify the configured AI provider end-to-end with a tiny request. The key itself is never returned."""
+    reply = llm_client.ask_llm("Reply with exactly: RestaurantIQ connection OK", max_tokens=50)
+    return {"ok": True, "provider": llm_client.provider(), "model": llm_client.model(), "reply": reply[:500]}
 
 
 @app.get("/api/schema/fields")
@@ -161,24 +261,26 @@ def canonical_fields():
 # ---------------------------------------------------------------------------
 @app.get("/api/datasets")
 def list_datasets():
-    return {"active": store.active_id(), "versions": store.list_datasets()}
+    uid = auth.current_user_id()
+    return {"active": store.active_id(uid), "versions": store.list_datasets(owner_id=uid)}
 
 
 @app.get("/api/datasets/active")
 def active_dataset():
-    ds = store.active_id()
-    return {"active": dataset_summary(store.dataset_meta(ds)) if ds else None}
+    ds = store.active_id(auth.current_user_id())
+    return {"active": dataset_summary(owned_meta(ds)) if ds else None}
 
 
 @app.put("/api/datasets/active")
 def set_active(req: ActiveDatasetRequest):
-    store.set_active(req.dataset_id)
-    return {"active": dataset_summary(store.dataset_meta(req.dataset_id))}
+    meta = owned_meta(req.dataset_id)
+    store.set_active(req.dataset_id, auth.current_user_id())
+    return {"active": dataset_summary(meta)}
 
 
 @app.get("/api/datasets/{dataset_id}")
 def dataset_detail(dataset_id: str):
-    meta = store.dataset_meta(dataset_id)
+    meta = owned_meta(dataset_id)
     return {**meta, "settings_used": store.settings()}
 
 
@@ -190,11 +292,11 @@ def outlier_impact(dataset_id: str, f: Filters = Depends(filter_params)):
 
 @app.get("/api/datasets/{dataset_id}/raw")
 def download_raw(dataset_id: str):
-    meta = store.dataset_meta(dataset_id)
+    meta = owned_meta(dataset_id)
     if meta.get("is_demo"):
         return Response(demo_csv_bytes(), media_type="text/csv",
                         headers={"Content-Disposition": 'attachment; filename="restaurantiq_sample_raw.csv"'})
-    path = store.upload_path(meta["source_upload_id"])
+    path = store.verify_upload(meta["source_upload_id"])  # checksum-verified raw file
     return FileResponse(path, filename=meta.get("source_filename") or path.name)
 
 
@@ -221,7 +323,7 @@ def csv_response(frame: pd.DataFrame, filename: str) -> StreamingResponse:
 
 @app.get("/api/datasets/{dataset_id}/cleaned.csv")
 def download_cleaned(dataset_id: str):
-    meta = store.dataset_meta(dataset_id)
+    owned_meta(dataset_id)
     frame = cleaned_export_frame(store.load_cleaned(dataset_id))
     return csv_response(frame, f"restaurantiq_{dataset_id}_cleaned.csv")
 
@@ -256,7 +358,7 @@ def upload_file(file: UploadFile = File(...)):
     if f".{ext}" not in ingest.SUPPORTED_EXTENSIONS:
         raise UserError(f"Unsupported file type '.{ext}'. Please upload a .csv or .xlsx file." if ext else
                         "The file has no extension. Please upload a .csv or .xlsx file.", 415)
-    upload_id, path = store.save_upload(file.file, filename)
+    upload_id, path = store.save_upload(file.file, filename, owner_id=auth.current_user_id())
     try:
         profile = ingest.profile_file(path, filename)
     except ingest.IngestError as exc:
@@ -276,14 +378,49 @@ def upload_file(file: UploadFile = File(...)):
     return {"upload_id": upload_id, "filename": filename, "size_bytes": meta["size_bytes"], "profile": profile}
 
 
+@app.get("/api/datasets/{dataset_id}/remap")
+def remap_dataset(dataset_id: str):
+    """Re-open the mapping wizard for an existing version's original file (imports become a NEW version).
+    Columns mapped before keep their mapping; previously unmapped columns get fresh suggestions."""
+    meta = owned_meta(dataset_id)
+    upload_id = meta.get("source_upload_id")
+    if meta.get("is_demo") or not upload_id:
+        raise UserError("The sample dataset has a fixed mapping. Load it again from the Data page instead.", 422)
+    upload = owned_upload(upload_id)
+    path = store.upload_path(upload_id)
+    if not path.exists():
+        raise UserError("The original file for this version is no longer stored. Please upload it again.", 404)
+    try:
+        profile = ingest.profile_file(path, upload["filename"])
+    except ingest.IngestError as exc:
+        raise UserError(str(exc), 422)
+    previous = meta.get("mapping", {})
+    for m in profile["suggested_mapping"]:
+        if m["source_column"] in previous:
+            m.update(suggested_field=previous[m["source_column"]], confidence="high",
+                     reason=f"Mapped this way in {dataset_id}.")
+    settings = meta.get("import_settings", {})
+    return {"upload_id": upload_id, "filename": upload["filename"], "size_bytes": upload["size_bytes"],
+            "profile": profile, "remap_of": dataset_id,
+            "previous_settings": {k: settings.get(k) for k in ("dataset_name", "rating_scale_max", "currency", "price_unit")}}
+
+
 def _load_upload_frame(upload_id: str) -> tuple[pd.DataFrame, dict]:
-    meta = store.upload_meta(upload_id)
+    meta = owned_upload(upload_id)
     path = store.upload_path(upload_id)
     try:
         fmt = ingest.detect_format(path, meta["filename"])
         return ingest.read_full(path, fmt), meta
     except ingest.IngestError as exc:
         raise UserError(str(exc), 422)
+
+
+def _looks_like_summary_table(raw: pd.DataFrame) -> bool:
+    """A grouped export such as 'cuisine,listings': few columns, one label column, the rest numeric."""
+    if not 2 <= raw.shape[1] <= 3:
+        return False
+    numeric = [c for c in raw.columns if pd.to_numeric(raw[c], errors="coerce").notna().mean() >= 0.9]
+    return len(numeric) == raw.shape[1] - 1
 
 
 def _clean_settings(raw: pd.DataFrame, settings: ImportSettings) -> CleanSettings:
@@ -293,14 +430,17 @@ def _clean_settings(raw: pd.DataFrame, settings: ImportSettings) -> CleanSetting
         raise UserError(f"Mapped column(s) not found in the file: {', '.join(missing)}.", 422)
     fields = set(mapping.values())
     if len(fields & ingest.RESTAURANT_SIGNAL_FIELDS) < 2:
+        if _looks_like_summary_table(raw):
+            raise UserError("This file is a summary table (one label column plus counts, e.g. listings per "
+                            "cuisine), not one row per restaurant. Upload the original restaurant-level file "
+                            "(for example zomato.csv) instead of a query or report export.", 422)
         raise UserError("This file does not look like restaurant data: map at least two of restaurant name, "
                         "cuisine, type, rating, cost, votes, location or online-order/booking columns, "
                         "or choose another file.", 422)
     scale_max = settings.rating_scale_max
     if "rating" in fields and scale_max is None:
         src = next(s for s, d in mapping.items() if d == "rating")
-        inferred = ingest.infer_rating_scale(raw[src])
-        scale_max = inferred["max"]
+        scale_max = ingest.header_rating_scale(src) or ingest.infer_rating_scale(raw[src])["max"]
         if scale_max is None:
             raise UserError("The rating scale could not be determined. Set the rating scale maximum "
                             "(for example 5, 10 or 100) before importing.", 422)
@@ -330,6 +470,7 @@ def _run_import(raw: pd.DataFrame, settings: ImportSettings, source: dict) -> di
         "log": result.log,
         "capabilities": capabilities,
         "columns": list(result.cleaned.columns),
+        "owner_id": auth.current_user_id(),
     }
     return store.create_dataset(result.cleaned, meta)
 
@@ -448,7 +589,7 @@ def list_restaurants(dataset_id: Optional[str] = None, f: Filters = Depends(filt
 
 @app.get("/api/restaurants/{rid}")
 def restaurant_detail(rid: int, dataset_id: Optional[str] = None):
-    ds = store.resolve(dataset_id)
+    ds = resolve_owned(dataset_id)
     cleaned = store.load_cleaned(ds)
     row = cleaned[cleaned["rid"] == rid]
     if row.empty:
@@ -458,7 +599,7 @@ def restaurant_detail(rid: int, dataset_id: Optional[str] = None):
     in_analysis = ctx.frame[ctx.frame["rid"] == rid]
     record["weighted_rating"] = (None if in_analysis.empty or pd.isna(in_analysis["weighted_rating"].iloc[0])
                                  else float(in_analysis["weighted_rating"].iloc[0]))
-    meta = store.dataset_meta(ds)
+    meta = owned_meta(ds)
     return {"restaurant": record, "extras": meta.get("extras", []), "prior": ctx.prior}
 
 
@@ -584,7 +725,7 @@ def report_pdf(req: ReportRequest):
 @app.get("/api/analyst/suggestions")
 def analyst_suggestions():
     from . import analyst
-    return {"suggestions": analyst.SUGGESTED, "mode": analyst.mode()}
+    return {"suggestions": analyst.SUGGESTED, "mode": analyst.mode(), "provider": llm_client.label()}
 
 
 @app.post("/api/analyst/ask")
